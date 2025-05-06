@@ -1,6 +1,6 @@
 from pyspark.streaming import StreamingContext
 from pyspark.sql import SparkSession
-spark = SparkSession.builder.appName('ExampleRDD').getOrCreate()
+spark = SparkSession.builder.appName('BatchToStream').getOrCreate()
 sc = spark.sparkContext
 ssc = StreamingContext(sc, 5)
 lines = ssc.textFileStream('stream_input/')
