@@ -1,4 +1,4 @@
-# Btach RDD-to-Kafka Structured Streaming Code Converter 
+# Batch RDD-to-Kafka Structured Streaming Code Converter 
 
 This tool automatically converts PySpark batch RDD-based code into equivalent Kafka-based structured streaming DataFrame code using Python's `ast` module.
 
