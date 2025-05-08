@@ -1,57 +1,3 @@
-# import argparse
-
-# # Step 1: Parse command-line argument
-# parser = argparse.ArgumentParser(description="Convert batch Spark code to streaming Spark code.")
-# parser.add_argument("input_file", help="Path to batch Python file (batch.py)")
-# args = parser.parse_args()
-
-# # Step 2: Read batch.py
-# with open(args.input_file, "r") as file:
-#     batch_code = file.read()
-
-# # Step 3: Build fixed stream.py
-# stream_py_code = """
-# from pyspark.sql import SparkSession
-# from pyspark.sql.functions import col
-# from pyspark.sql.types import StructType, StructField, StringType, DoubleType
-
-# # Initialize Spark session
-# spark = SparkSession.builder.appName("StreamingProcessingExample").getOrCreate()
-
-# # Define schema
-# schema = StructType([
-#     StructField("id", StringType(), True),
-#     StructField("category", StringType(), True),
-#     StructField("value", StringType(), True)
-# ])
-
-# # Read streaming data
-# df_stream_raw = spark.readStream.option("header", True).option("maxFilesPerTrigger", 1).schema(schema).csv("stream_input/")
-
-# # Select and cast
-# df_stream = df_stream_raw.select(
-#     col("category"),
-#     col("value").cast("double")
-# )
-
-# # Apply transformations
-# df_filtered = df_stream.filter(col('value') > 50)
-# df_grouped = df_filtered.groupBy("category").count()
-
-# # Write output to console
-# query = df_grouped.writeStream.outputMode("complete").format("console").start()
-# query.awaitTermination()
-# """
-
-# # Step 4: Save stream.py
-# with open("stream.py", "w") as file:
-#     file.write(stream_py_code)
-
-# print("✅ Correct stream.py generated successfully!")
-
-
-
-
 import ast
 import astor
 import argparse
@@ -59,77 +5,93 @@ import argparse
 class BatchToStreamTransformer(ast.NodeTransformer):
     def __init__(self):
         super().__init__()
-        self.df_name = None
+        self.write_df_name = None
+        self.has_write_stream = False
 
     def visit_Assign(self, node):
         if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
             if node.value.func.attr == "csv":
-                self.df_name = node.targets[0].id
-
-                # Use spark.readStream instead of spark.read
-                read_stream_base = ast.Attribute(
-                    value=ast.Name(id='spark', ctx=ast.Load()),
-                    attr='readStream',
-                    ctx=ast.Load()
-                )
-
-                read_node = ast.Call(
-                    func=ast.Attribute(value=read_stream_base, attr='option', ctx=ast.Load()),
-                    args=[ast.Str(s='header'), ast.NameConstant(value=True)],
+                print("🔹 Rewriting spark.read.csv → spark.readStream.csv")
+                self.write_df_name = node.targets[0].id
+                read_stream = ast.Call(
+                    func=ast.Attribute(
+                        value=ast.Attribute(
+                            value=ast.Name(id='spark', ctx=ast.Load()),
+                            attr='readStream',
+                            ctx=ast.Load()
+                        ),
+                        attr='option',
+                        ctx=ast.Load()
+                    ),
+                    args=[ast.Constant(value='header'), ast.Constant(value=True)],
                     keywords=[]
                 )
-                read_node = ast.Call(
-                    func=ast.Attribute(value=read_node, attr='option', ctx=ast.Load()),
-                    args=[ast.Str(s='maxFilesPerTrigger'), ast.Str(s='1')],
+                read_stream = ast.Call(
+                    func=ast.Attribute(value=read_stream, attr='option', ctx=ast.Load()),
+                    args=[ast.Constant(value='maxFilesPerTrigger'), ast.Constant(value='1')],
                     keywords=[]
                 )
-                read_node = ast.Call(
-                    func=ast.Attribute(value=read_node, attr='schema', ctx=ast.Load()),
+                read_stream = ast.Call(
+                    func=ast.Attribute(value=read_stream, attr='schema', ctx=ast.Load()),
                     args=[ast.Name(id='schema', ctx=ast.Load())],
                     keywords=[]
                 )
-                read_node = ast.Call(
-                    func=ast.Attribute(value=read_node, attr='csv', ctx=ast.Load()),
-                    args=[ast.Str(s='stream_input/')],
+                read_stream = ast.Call(
+                    func=ast.Attribute(value=read_stream, attr='csv', ctx=ast.Load()),
+                    args=[ast.Constant(value='stream_input/')],
                     keywords=[]
                 )
-                node.value = read_node
-        return node
+                node.value = read_stream
+        return self.generic_visit(node)
 
     def visit_Expr(self, node):
-        # Detect and replace df.write.csv(...) as an expression
         if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
+            if node.value.func.attr == "show":
+                print(" Removing unsupported .show() for streaming")
+                return None
             if node.value.func.attr == 'csv':
-                # Correct base: df_grouped.writeStream (not callable!)
-                write_stream_base = ast.Attribute(
-                    value=ast.Name(id='df_grouped', ctx=ast.Load()),
-                    attr='writeStream',
-                    ctx=ast.Load()
-                )
+                print("🔹 Rewriting df.write.csv → df.writeStream.start")
+                self.has_write_stream = True
+                # find correct DataFrame name used in write
+                base_df = node.value.func.value
+                if isinstance(base_df, ast.Attribute) and base_df.attr == "write":
+                    base_df = base_df.value
 
-                query_node = ast.Call(
-                    func=ast.Attribute(value=write_stream_base, attr='outputMode', ctx=ast.Load()),
-                    args=[ast.Str(s='complete')], keywords=[]
+                write_stream = ast.Call(
+                    func=ast.Attribute(
+                        value=ast.Attribute(
+                            value=base_df,
+                            attr='writeStream',
+                            ctx=ast.Load()
+                        ),
+                        attr='outputMode',
+                        ctx=ast.Load()
+                    ),
+                    args=[ast.Constant(value='complete')],
+                    keywords=[]
                 )
-                query_node = ast.Call(
-                    func=ast.Attribute(value=query_node, attr='format', ctx=ast.Load()),
-                    args=[ast.Str(s='console')], keywords=[]
+                write_stream = ast.Call(
+                    func=ast.Attribute(value=write_stream, attr='format', ctx=ast.Load()),
+                    args=[ast.Constant(value='console')],
+                    keywords=[]
                 )
-                query_node = ast.Call(
-                    func=ast.Attribute(value=query_node, attr='start', ctx=ast.Load()),
-                    args=[], keywords=[]
+                write_stream = ast.Call(
+                    func=ast.Attribute(value=write_stream, attr='start', ctx=ast.Load()),
+                    args=[],
+                    keywords=[]
                 )
+                return ast.Assign(targets=[ast.Name(id='query', ctx=ast.Store())], value=write_stream)
+        return self.generic_visit(node)
 
-                return ast.Assign(
-                    targets=[ast.Name(id='query', ctx=ast.Store())],
-                    value=query_node
-                )
+    def visit_Module(self, node):
+        node.body = [stmt for stmt in node.body if stmt is not None]
+        self.generic_visit(node)
         return node
 
 # ===== MAIN EXECUTION =====
 
-parser = argparse.ArgumentParser(description="Convert batch.py to stream.py using AST")
-parser.add_argument("input_file", help="Path to batch.py")
+parser = argparse.ArgumentParser(description="Convert batch DataFrame Spark code to structured streaming Spark code.")
+parser.add_argument("input_file", help="Path to batch DataFrame Python file")
 args = parser.parse_args()
 
 with open(args.input_file, "r") as f:
@@ -138,9 +100,9 @@ with open(args.input_file, "r") as f:
 tree = ast.parse(batch_code)
 transformer = BatchToStreamTransformer()
 transformed_tree = transformer.visit(tree)
+
 stream_logic = astor.to_source(transformed_tree)
 
-# Header for streaming
 stream_header = '''from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
@@ -148,19 +110,17 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 spark = SparkSession.builder.appName("StreamingProcessingExample").getOrCreate()
 
 schema = StructType([
-    StructField("id", StringType(), True),
+    StructField("timestamp", StringType(), True),  
     StructField("category", StringType(), True),
-    StructField("value", StringType(), True)
+    StructField("value", DoubleType(), True)
 ])
 '''
 
-# Footer
-stream_footer = '\nquery.awaitTermination()\n'
+stream_footer = '\nquery.awaitTermination()\n' if transformer.has_write_stream else ''
 
-# Final assembly..
 final_code = stream_header + "\n" + stream_logic + stream_footer
 
-with open("stream.py", "w") as f:
+with open("stream_output3.py", "w", encoding="utf-8") as f:
     f.write(final_code)
 
-print("✅ Final working stream.py generated successfully!")
+print("✅ Structured streaming code saved to 'stream_output2.py'")
