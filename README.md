@@ -14,6 +14,8 @@ This tool automatically converts PySpark batch RDD-based code into equivalent Ka
 ---
 
 ## Directory Structure
+
+```
 ├── ast_converter_rdd_to_kafka_streaming.py # Main interface
 ├── batch_rdd.py # Example batch RDD input
 ├── stream_output_rdd.py # Output structured streaming version for batch_rdd.py
@@ -21,6 +23,7 @@ This tool automatically converts PySpark batch RDD-based code into equivalent Ka
 ├── stream_output_rdd1.py # Output structured streaming version batch_rdd_1.py
 ├── ast_converter #converts df based batch code to stream code 
 └── README.md
+```
 
 ## Run the converter:
 
